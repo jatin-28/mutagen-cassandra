@@ -1,31 +1,13 @@
 package com.toddfast.mutagen.cassandra.impl;
 
-import com.toddfast.mutagen.cassandra.CassandraMutagen;
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import com.google.common.collect.ImmutableMap;
-import com.netflix.astyanax.AstyanaxContext;
-import com.netflix.astyanax.Keyspace;
-import com.netflix.astyanax.connectionpool.OperationResult;
-import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
-import com.netflix.astyanax.connectionpool.impl.ConnectionPoolConfigurationImpl;
-import com.netflix.astyanax.connectionpool.impl.CountingConnectionPoolMonitor;
-import com.netflix.astyanax.ddl.SchemaChangeResult;
-import com.netflix.astyanax.impl.AstyanaxConfigurationImpl;
-import com.netflix.astyanax.model.ColumnFamily;
-import com.netflix.astyanax.model.ColumnList;
-import com.netflix.astyanax.model.ConsistencyLevel;
-import com.netflix.astyanax.serializers.StringSerializer;
-import com.netflix.astyanax.thrift.ThriftFamilyFactory;
+import com.datastax.driver.core.*;
 import com.toddfast.mutagen.Plan;
 import com.toddfast.mutagen.State;
+import com.toddfast.mutagen.cassandra.CassandraMutagen;
+import org.junit.*;
+
 import java.io.IOException;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+
 import static org.junit.Assert.*;
 
 /**
@@ -34,7 +16,9 @@ import static org.junit.Assert.*;
  */
 public class CassandraMutagenImplTest {
 
-	public CassandraMutagenImplTest() {
+    private static final String KEY_SPACE = "TEST_KEYSPACE";
+
+    public CassandraMutagenImplTest() {
 	}
 
 
@@ -46,59 +30,42 @@ public class CassandraMutagenImplTest {
 	}
 
 	private static void defineKeyspace() {
-		context=new AstyanaxContext.Builder()
-			.forKeyspace("mutagen_test")
-			.withAstyanaxConfiguration(new AstyanaxConfigurationImpl()
-//					.setDiscoveryType(NodeDiscoveryType.RING_DESCRIBE)
-//					.setCqlVersion("3.0.0")
-//					.setTargetCassandraVersion("1.2")
-				.setDefaultReadConsistencyLevel(ConsistencyLevel.CL_QUORUM)
-				.setDefaultWriteConsistencyLevel(ConsistencyLevel.CL_QUORUM)
-			)
-			.withConnectionPoolConfiguration(
-				new ConnectionPoolConfigurationImpl("testPool")
-				.setPort(9160)
-				.setMaxConnsPerHost(1)
-				.setSeeds("localhost")
-			)
-			.withConnectionPoolMonitor(new CountingConnectionPoolMonitor())
-			.buildKeyspace(ThriftFamilyFactory.getInstance());
+        int maxConnections = 1;
 
-		context.start();
-		keyspace=context.getClient();
+        PoolingOptions pools = new PoolingOptions();
+        pools.setMaxSimultaneousRequestsPerConnectionThreshold(HostDistance.LOCAL, 2);
+        pools.setCoreConnectionsPerHost(HostDistance.LOCAL, maxConnections);
+        pools.setMaxConnectionsPerHost(HostDistance.LOCAL, maxConnections);
+        pools.setCoreConnectionsPerHost(HostDistance.REMOTE, maxConnections);
+        pools.setMaxConnectionsPerHost(HostDistance.REMOTE, maxConnections);
+
+        Cluster cluster = new Cluster.Builder()
+                .withPoolingOptions(pools)
+                .addContactPoint("localhost")
+                //.withPort(9160)
+                .withSocketOptions(new SocketOptions().setTcpNoDelay(true))
+                .build();
+
+        session = cluster.connect();
 	}
 
-	private static void createKeyspace()
-			throws ConnectionException {
+	private static void createKeyspace() {
 
-		System.out.println("Creating keyspace "+keyspace+"...");
+		System.out.println("Creating session "+ session +"...");
 
-		int keyspaceReplicationFactor=1;
+        session.execute("create keyspace " + KEY_SPACE + " with replication = {'class': 'SimpleStrategy', 'replication_factor': 1};");
 
-		Map<String, Object> keyspaceConfig=
-			new HashMap<String, Object>();
-		keyspaceConfig.put("strategy_options",
-			ImmutableMap.<String, Object>builder()
-				.put("replication_factor",
-					""+keyspaceReplicationFactor)
-				.build());
+        session.execute("use " + KEY_SPACE + ";");
 
-		String keyspaceStrategyClass="SimpleStrategy";
-		keyspaceConfig.put("strategy_class",keyspaceStrategyClass);
-
-		OperationResult<SchemaChangeResult> result=
-			keyspace.createKeyspace(
-				Collections.unmodifiableMap(keyspaceConfig));
-
-		System.out.println("Created keyspace "+keyspace);
+		System.out.println("Created session "+ session);
 	}
 
 
 	@AfterClass
 	public static void tearDownClass()
 			throws Exception {
-		OperationResult<SchemaChangeResult> result=keyspace.dropKeyspace();
-		System.out.println("Dropped keyspace "+keyspace);
+		session.execute("drop keyspace " + KEY_SPACE);
+		System.out.println("Dropped session "+ session);
 	}
 
 
@@ -128,7 +95,7 @@ public class CassandraMutagenImplTest {
 		mutagen.initialize(rootResourcePath);
 
 		// Mutate!
-		Plan.Result<Integer> result=mutagen.mutate(keyspace);
+		Plan.Result<Integer> result=mutagen.mutate(session);
 
 		return result;
 	}
@@ -168,42 +135,33 @@ public class CassandraMutagenImplTest {
 	@Test
 	public void testData() throws Exception {
 
-		final ColumnFamily<String,String> CF_TEST1=
-			ColumnFamily.newColumnFamily("Test1",
-				StringSerializer.get(),StringSerializer.get());
+        String query = "select * from Test1 where key = ?";
+        PreparedStatement prepare = session.prepare(query);
 
-		ColumnList<String> columns;
-		columns=keyspace.prepareQuery(CF_TEST1)
-			.getKey("row1")
-			.execute()
-			.getResult();
 
-		assertEquals("foo",columns.getStringValue("value1",null));
-		assertEquals("bar",columns.getStringValue("value2",null));
+        ResultSet resultSet = session.execute(prepare.bind("row1"));
+        Row row = resultSet.one();
 
-		columns=keyspace.prepareQuery(CF_TEST1)
-			.getKey("row2")
-			.execute()
-			.getResult();
+        assertEquals("foo", row.getString("value1"));
+		assertEquals("bar", row.getString("value2"));
 
-		assertEquals("chicken",columns.getStringValue("value1",null));
-		assertEquals("sneeze",columns.getStringValue("value2",null));
+        resultSet = session.execute(prepare.bind("row2"));
+        row = resultSet.one();
 
-		columns=keyspace.prepareQuery(CF_TEST1)
-			.getKey("row3")
-			.execute()
-			.getResult();
+		assertEquals("chicken",row.getString("value1"));
+		assertEquals("sneeze", row.getString("value2"));
 
-		assertEquals("bar",columns.getStringValue("value1",null));
-		assertEquals("baz",columns.getStringValue("value2",null));
+        resultSet = session.execute(prepare.bind("row3"));
+        row = resultSet.one();
+
+		assertEquals("bar",row.getString("value1"));
+		assertEquals("baz",row.getString("value2"));
 	}
-	
-	
-	
+
 	////////////////////////////////////////////////////////////////////////////
 	// Fields
 	////////////////////////////////////////////////////////////////////////////
 
-	private static AstyanaxContext<Keyspace> context;
-	private static Keyspace keyspace;
+	private static Session session;
+
 }

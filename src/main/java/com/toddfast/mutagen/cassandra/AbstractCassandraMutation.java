@@ -1,12 +1,13 @@
 package com.toddfast.mutagen.cassandra;
 
-import com.netflix.astyanax.Keyspace;
-import com.netflix.astyanax.MutationBatch;
-import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
+import com.datastax.driver.core.BoundStatement;
+import com.datastax.driver.core.PreparedStatement;
+import com.datastax.driver.core.Session;
 import com.toddfast.mutagen.MutagenException;
 import com.toddfast.mutagen.Mutation;
 import com.toddfast.mutagen.State;
 import com.toddfast.mutagen.basic.SimpleState;
+
 import java.io.UnsupportedEncodingException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -21,9 +22,9 @@ public abstract class AbstractCassandraMutation implements Mutation<Integer> {
 	 *
 	 *
 	 */
-	protected AbstractCassandraMutation(Keyspace keyspace) {
+	protected AbstractCassandraMutation(Session session) {
 		super();
-		this.keyspace=keyspace;
+		this.session = session;
 	}
 
 
@@ -83,8 +84,8 @@ public abstract class AbstractCassandraMutation implements Mutation<Integer> {
 	 *
 	 *
 	 */
-	protected Keyspace getKeyspace() {
-		return keyspace;
+	protected Session getSession() {
+		return session;
 	}
 
 
@@ -128,36 +129,39 @@ public abstract class AbstractCassandraMutation implements Mutation<Integer> {
 			change="";
 		}
 
-		String changeHash=md5String(change);
+		String changeHash= md5String(change);
 
-		// The straightforward way, without locking
-		try {
-			MutationBatch batch=getKeyspace().prepareMutationBatch();
-			batch
-				.withRow(CassandraSubject.VERSION_CF,
-					CassandraSubject.ROW_KEY)
-				.putColumn(CassandraSubject.VERSION_COLUMN,version);
+        String query = "INSERT INTO schema_version (version, change, hash) VALUES (?,?,?)";
+        PreparedStatement prepare = getSession().prepare(query);
+        BoundStatement boundStatement = prepare.bind(version, change, changeHash);
 
-			batch
-				.withRow(CassandraSubject.VERSION_CF,
-					String.format("%08d",version))
-				.putColumn("change",change)
-				.putColumn("hash",changeHash);
+        try {
+            getSession().execute(boundStatement);
+        } catch (Exception e) {
+            throw new MutagenException("Could not update \"schema_version\" "+
+                    "column family to state "+version+
+                    "; schema is now out of sync with recorded version",e);
+        }
 
-			batch.execute();
-		}
-		catch (ConnectionException e) {
-			throw new MutagenException("Could not update \"schema_version\" "+
-				"column family to state "+version+
-				"; schema is now out of sync with recorded version",e);
-		}
+        query = "UPDATE schema_current_version set version = ? where state = ?";
+        prepare = getSession().prepare(query);
+        boundStatement = prepare.bind(version, CassandraSubject.ROW_KEY);
+
+        try {
+            getSession().execute(boundStatement);
+        } catch (Exception e) {
+            throw new MutagenException("Could not update \"schema_version\" "+
+                    "column family to state "+version+
+                    "; schema is now out of sync with recorded version",e);
+        }
+
 
 // TAF: Why does this fail with a StaleLockException? Do we need to use a
 // separate lock table?
 
 //		// Attempt to acquire a lock to update the version
 //		ColumnPrefixDistributedRowLock<String> lock =
-//			new ColumnPrefixDistributedRowLock<String>(getKeyspace(),
+//			new ColumnPrefixDistributedRowLock<String>(getSession(),
 //					CassandraSubject.VERSION_CF,CassandraSubject.VERSION_COLUMN)
 //				.withBackoff(new BoundedExponentialBackoff(250, 10000, 10))
 //				.expireLockAfter(1, TimeUnit.SECONDS)
@@ -190,7 +194,7 @@ public abstract class AbstractCassandraMutation implements Mutation<Integer> {
 //		}
 //		finally {
 //			try {
-//				MutationBatch batch=getKeyspace().prepareMutationBatch();
+//				MutationBatch batch=getSession().prepareMutationBatch();
 //				batch.withRow(CassandraSubject.VERSION_CF,
 //						CassandraSubject.ROW_KEY)
 //					.putColumn(CassandraSubject.VERSION_COLUMN,version);
@@ -281,5 +285,5 @@ public abstract class AbstractCassandraMutation implements Mutation<Integer> {
 	// Fields
 	////////////////////////////////////////////////////////////////////////////
 
-	private Keyspace keyspace;
+	private Session session;
 }

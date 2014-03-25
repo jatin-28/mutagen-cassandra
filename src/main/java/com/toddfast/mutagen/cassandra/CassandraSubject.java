@@ -1,15 +1,7 @@
 package com.toddfast.mutagen.cassandra;
 
-import com.netflix.astyanax.Keyspace;
-import com.netflix.astyanax.connectionpool.OperationResult;
-import com.netflix.astyanax.connectionpool.exceptions.ConnectionException;
-import com.netflix.astyanax.ddl.SchemaChangeResult;
-import com.netflix.astyanax.model.ColumnFamily;
-import com.netflix.astyanax.model.ColumnList;
-import com.netflix.astyanax.query.RowQuery;
-import com.netflix.astyanax.serializers.ByteBufferSerializer;
-import com.netflix.astyanax.serializers.StringSerializer;
-import com.toddfast.mutagen.MutagenException;
+import com.datastax.driver.core.*;
+import com.datastax.driver.core.exceptions.AlreadyExistsException;
 import com.toddfast.mutagen.State;
 import com.toddfast.mutagen.Subject;
 import com.toddfast.mutagen.basic.SimpleState;
@@ -24,35 +16,33 @@ public class CassandraSubject implements Subject<Integer> {
 	 *
 	 *
 	 */
-	public CassandraSubject(Keyspace keyspace) {
+	public CassandraSubject(Session session) {
 		super();
-		if (keyspace==null) {
+		if (session ==null) {
 			throw new IllegalArgumentException(
-				"Parameter \"keyspace\" cannot be null");
+				"Parameter \"session\" cannot be null");
 		}
 
-		this.keyspace=keyspace;
+		this.session = session;
 	}
-
 
 	/**
 	 *
 	 *
 	 */
-	public Keyspace getKeyspace() {
-		return keyspace;
-	}
+	private void createSchemaVersionTable() {
+        try {
+            session.execute(VERSION_CF);
+        } catch (AlreadyExistsException e) {
+            // horrible hack should check to see if table exists.
+        }
 
-
-	/**
-	 *
-	 *
-	 */
-	private void createSchemaVersionTable()
-			throws ConnectionException {
-		OperationResult<SchemaChangeResult> result=
-			getKeyspace().createColumnFamily(VERSION_CF,null);
-	}
+        try {
+            session.execute(CURRENT_VERSION_CF);
+        } catch (AlreadyExistsException e) {
+            // horrible hack should check to see if table exists.
+        }
+    }
 
 
 	/**
@@ -61,42 +51,19 @@ public class CassandraSubject implements Subject<Integer> {
 	 */
 	@Override
 	public State<Integer> getCurrentState() {
+        createSchemaVersionTable();
 
-		RowQuery<String,String> query=
-			getKeyspace().prepareQuery(VERSION_CF)
-				.getKey(ROW_KEY);
+        String query = "select * from schema_current_version where state = ?";
 
-		OperationResult<ColumnList<String>> result=null;
-		try {
-			result=query.execute();
-		}
-		catch (ConnectionException e) {
-			// Probably because the table doesn't exist
-			try {
-				createSchemaVersionTable();
-			}
-			catch (ConnectionException ex) {
-				throw new MutagenException("Could not create column family "+
-					"\"schema_version\"",ex);
-			}
-		}
+        PreparedStatement prepare = session.prepare(query);
+        BoundStatement boundStatement = prepare.bind(ROW_KEY);
+        ResultSet resultSet = session.execute(boundStatement);
+        Row row = resultSet.one();
 
-		// Now try again
-		try {
-			result=query.execute();
-		}
-		catch (ConnectionException e) {
-			throw new MutagenException("Could not retrieve version from "+
-				"column family \"schema_version\"",e);
-		}
-
-		ColumnList<String> columns=result.getResult();
-		Integer version=columns.getIntegerValue(VERSION_COLUMN,null);
-
-		if (version==null) {
-			// Most likely the column family has only just been created
-			version=0;
-		}
+        int version = 0;
+        if( row != null) {
+            version = row.getInt(VERSION_COLUMN);
+        }
 
 		return new SimpleState<Integer>(version);
 	}
@@ -108,14 +75,13 @@ public class CassandraSubject implements Subject<Integer> {
 	// Fields
 	////////////////////////////////////////////////////////////////////////////
 
-	public static final ColumnFamily<String,String> VERSION_CF=
-		ColumnFamily.newColumnFamily(
-			"schema_version",
-			StringSerializer.get(),
-			StringSerializer.get(),
-			ByteBufferSerializer.get());
+
+    // table stores processed versions
+    private static final String VERSION_CF = "create table schema_version ( version int primary key, change text, hash text  );";
+    private static final String CURRENT_VERSION_CF = "create table schema_current_version ( state text primary key, version int ); ";
+
 	public static final String ROW_KEY="state";
 	public static final String VERSION_COLUMN="version";
 
-	private Keyspace keyspace;
+	private Session session;
 }

@@ -1,12 +1,9 @@
 package com.toddfast.mutagen.cassandra.impl;
 
-import com.netflix.astyanax.Keyspace;
-import com.toddfast.mutagen.Coordinator;
-import com.toddfast.mutagen.MutagenException;
-import com.toddfast.mutagen.Mutation;
-import com.toddfast.mutagen.Plan;
-import com.toddfast.mutagen.Subject;
+import com.datastax.driver.core.Session;
+import com.toddfast.mutagen.*;
 import com.toddfast.mutagen.basic.BasicPlanner;
+
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
@@ -23,9 +20,9 @@ public class CassandraPlanner extends BasicPlanner<Integer> {
 	 *
 	 *
 	 */
-	protected CassandraPlanner(Keyspace keyspace, 
+	protected CassandraPlanner(Session session,
 			List<String> mutationResources) {
-		super(loadMutations(keyspace,mutationResources),null);
+		super(loadMutations(session,mutationResources),null);
 	}
 
 
@@ -34,7 +31,7 @@ public class CassandraPlanner extends BasicPlanner<Integer> {
 	 *
 	 */
 	private static List<Mutation<Integer>> loadMutations(
-			Keyspace keyspace, Collection<String> resources) {
+			Session session, Collection<String> resources) {
 
 		List<Mutation<Integer>> result=new ArrayList<Mutation<Integer>>();
 
@@ -44,12 +41,12 @@ public class CassandraPlanner extends BasicPlanner<Integer> {
 			// for SQL but not CQL
 			if (resource.endsWith(".cql") || resource.endsWith(".sql")) {
 				result.add(
-					new CQLMutation(keyspace,resource));
+					new CQLMutation(session,resource));
 			}
 			else
 			if (resource.endsWith(".class")) {
 				result.add(
-					loadMutationClass(keyspace,resource));
+					loadMutationClass(session,resource));
 			}
 			else {
 				throw new IllegalArgumentException("Unknown type for "+
@@ -66,7 +63,7 @@ public class CassandraPlanner extends BasicPlanner<Integer> {
 	 *
 	 */
 	private static Mutation<Integer> loadMutationClass(
-			Keyspace keyspace, String resource) {
+			Session session, String resource) {
 
 		assert resource.endsWith(".class"):
 			"Class resource name \""+resource+"\" should end with .class";
@@ -91,8 +88,8 @@ public class CassandraPlanner extends BasicPlanner<Integer> {
 			Mutation<Integer> mutation=null;
 			try {
 				// Try a constructor taking a keyspace
-				constructor=clazz.getConstructor(Keyspace.class);
-				mutation=(Mutation<Integer>)constructor.newInstance(keyspace);
+				constructor=clazz.getConstructor(Session.class);
+				mutation=(Mutation<Integer>)constructor.newInstance(session);
 			}
 			catch (NoSuchMethodException e) {
 				// Wrong assumption
