@@ -1,3 +1,5 @@
+* This FORK - replaces the Astyanax driver and it is now using CQL 3 *
+
 mutagen-cassandra
 =================
 
