@@ -93,7 +93,7 @@ public class CassandraMutagenImpl implements CassandraMutagen {
 		// Do this in a VM-wide critical section. External cluster-wide 
 		// synchronization is going to have to happen in the coordinator.
 		synchronized (System.class) {
-			CassandraCoordinator coordinator=new CassandraCoordinator(session);
+			CassandraCoordinator coordinator=new CassandraCoordinator();
 			CassandraSubject subject=new CassandraSubject(session);
 
 			Planner<Integer> planner=
