@@ -29,7 +29,7 @@ public class CassandraSubject implements Subject<Integer> {
 	/**
 	 *
 	 *
-	 */
+	 */                   // TODO do we need write quorom - ALL consistency?
 	private void createSchemaVersionTable() {
         try {
             session.execute(VERSION_CF);

@@ -131,6 +131,7 @@ public abstract class AbstractCassandraMutation implements Mutation<Integer> {
 
 		String changeHash= md5String(change);
 
+        // TODO do we need write quorom - ALL consistency?
         String query = "INSERT INTO schema_version (version, change, hash) VALUES (?,?,?)";
         PreparedStatement prepare = getSession().prepare(query);
         BoundStatement boundStatement = prepare.bind(version, change, changeHash);
